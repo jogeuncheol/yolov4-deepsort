@@ -23,8 +23,10 @@ from deep_sort import preprocessing, nn_matching
 from deep_sort.detection import Detection
 from deep_sort.tracker import Tracker
 from tools import generate_detections as gdet
+
+
 flags.DEFINE_string('framework', 'tf', '(tf, tflite, trt')
-flags.DEFINE_string('weights', './checkpoints/yolov4-416',
+flags.DEFINE_string('weights', './checkpoints/yolov4-tiny-416',
                     'path to weights file')
 flags.DEFINE_integer('size', 416, 'resize images to')
 flags.DEFINE_boolean('tiny', False, 'yolo or yolo-tiny')
@@ -58,7 +60,8 @@ def main(_argv):
     session = InteractiveSession(config=config)
     STRIDES, ANCHORS, NUM_CLASS, XYSCALE = utils.load_config(FLAGS)
     input_size = FLAGS.size
-    video_path = FLAGS.video
+    # video_path = FLAGS.video
+    video_path = "E:/workspace/video_sample/day_smoke.mp4"
 
     # load tflite model if flag is set
     if FLAGS.framework == 'tflite':
@@ -91,6 +94,9 @@ def main(_argv):
         out = cv2.VideoWriter(FLAGS.output, codec, fps, (width, height))
 
     frame_num = 0
+    is_set_ROI = 0
+    outer_ROI = [0, 0, 0, 0]
+    inner_ROI = [0, 0, 0, 0]
     # while video is running
     while True:
         return_value, frame = vid.read()
@@ -100,6 +106,11 @@ def main(_argv):
         else:
             print('Video has ended or failed, try a different video format!')
             break
+
+        # gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # gaussian_blur = cv2.GaussianBlur(frame, (3, 3), 0)
+        # frame = cv2.Laplacian(gaussian_blur, ddepth=-1, ksize=3)
+
         frame_num +=1
         print('Frame #: ', frame_num)
         frame_size = frame.shape[:2]
@@ -157,10 +168,10 @@ def main(_argv):
         class_names = utils.read_class_names(cfg.YOLO.CLASSES)
 
         # by default allow all classes in .names file
-        allowed_classes = list(class_names.values())
+        # allowed_classes = list(class_names.values())
         
         # custom allowed classes (uncomment line below to customize tracker for only people)
-        #allowed_classes = ['person']
+        allowed_classes = ['person']
 
         # loop through objects and use class index to get class name, allow only classes in allowed_classes list
         names = []
@@ -206,7 +217,39 @@ def main(_argv):
                 continue 
             bbox = track.to_tlbr()
             class_name = track.get_class()
-            
+
+            print(inner_ROI[0] > bbox[0])
+            print(inner_ROI[1] > bbox[1])
+            print(inner_ROI[0] + inner_ROI[2] < bbox[2])
+            print(inner_ROI[1] + inner_ROI[3] < bbox[3])
+            if is_set_ROI and (inner_ROI[0] > bbox[0] or inner_ROI[1] > bbox[1] or inner_ROI[0] + inner_ROI[2] < bbox[2]):
+                is_set_ROI = 0
+            x, y, w, h = bbox
+            w = w - x
+            h = h - y
+            print("bbox x, y, w, h : {} {} {} {}".format(int(x), int(y), int(w), int(h)))
+        # [add] calculate ROI
+            if not is_set_ROI:
+                is_set_ROI = 1
+                R = (h * 0.5) / 3
+                outer_ROI[0] = (x - R)
+                outer_ROI[1] = (y - R)
+                outer_ROI[2] = (w + (2 * R))
+                outer_ROI[3] = (3 * R)
+                Rx = x - R
+                Ry = y - R
+                Rw = w + (2 * R)
+                Rh = 3 * R
+
+                inner_ROI[0] = (x - (R * 0.5))
+                inner_ROI[1] = (y - (R * 0.5))
+                inner_ROI[2] = (w + R)
+                inner_ROI[3] = (R + (R * 0.5))
+                RRx = x - (R * 0.5)
+                RRy = y - (R * 0.5)
+                RRw = w + R
+                RRh = R + (R * 0.5)
+
         # draw bbox on screen
             color = colors[int(track.track_id) % len(colors)]
             color = [i * 255 for i in color]
@@ -217,6 +260,20 @@ def main(_argv):
         # if enable info flag then print details about each track
             if FLAGS.info:
                 print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
+
+        # [add] draw outer_ROI and inner_ROI on screen
+        if is_set_ROI:
+            cv2.rectangle(frame, (int(outer_ROI[0]), int(outer_ROI[1])), (int(outer_ROI[0] + outer_ROI[2]), int(outer_ROI[1] + outer_ROI[3])), (255, 0, 0), 2)
+            cv2.rectangle(frame, (int(outer_ROI[0]), int(outer_ROI[1] - 30)),
+                          (int(outer_ROI[0]) + len("outer_ROI") * 17, int(outer_ROI[1])), (255, 0, 0), -1)
+            cv2.putText(frame, "outer_ROI", (int(outer_ROI[0]), int(outer_ROI[1] - 10)), 0, 0.75,
+                        (255, 255, 255), 2)
+
+            cv2.rectangle(frame, (int(inner_ROI[0]), int(inner_ROI[1])), (int(inner_ROI[0] + inner_ROI[2]), int(inner_ROI[1] + inner_ROI[3])), (0, 255, 0), 2)
+            cv2.rectangle(frame, (int(inner_ROI[0]), int(inner_ROI[1] - 30)),
+                          (int(inner_ROI[0]) + len("inner_ROI") * 17, int(inner_ROI[1])), (0, 255, 0), -1)
+            cv2.putText(frame, "inner_ROI", (int(inner_ROI[0]), int(inner_ROI[1] - 10)), 0, 0.75,
+                        (255, 255, 255), 2)
 
         # calculate frames per second of running detections
         fps = 1.0 / (time.time() - start_time)
