@@ -99,7 +99,8 @@ def main(_argv):
     inner_ROI = [0, 0, 0, 0]
     # while video is running
     while True:
-        return_value, frame = vid.read()
+        return_value, original_image = vid.read()
+        frame = original_image
         if return_value:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image = Image.fromarray(frame)
@@ -222,11 +223,11 @@ def main(_argv):
             print(inner_ROI[1] > bbox[1])
             print(inner_ROI[0] + inner_ROI[2] < bbox[2])
             print(inner_ROI[1] + inner_ROI[3] < bbox[3])
-            if is_set_ROI and (inner_ROI[0] > bbox[0] or inner_ROI[1] > bbox[1] or inner_ROI[0] + inner_ROI[2] < bbox[2]):
-                is_set_ROI = 0
             x, y, w, h = bbox
             w = w - x
             h = h - y
+            if is_set_ROI and (inner_ROI[0] > bbox[0] + (w / 3) or inner_ROI[1] > bbox[1] or inner_ROI[0] + inner_ROI[2] < bbox[2] - (w / 3)):
+                is_set_ROI = 0
             print("bbox x, y, w, h : {} {} {} {}".format(int(x), int(y), int(w), int(h)))
         # [add] calculate ROI
             if not is_set_ROI:
@@ -257,6 +258,10 @@ def main(_argv):
             cv2.rectangle(frame, (int(bbox[0]), int(bbox[1]-30)), (int(bbox[0])+(len(class_name)+len(str(track.track_id)))*17, int(bbox[1])), color, -1)
             cv2.putText(frame, class_name + "-" + str(track.track_id),(int(bbox[0]), int(bbox[1]-10)),0, 0.75, (255,255,255),2)
 
+        # draw CROSS Marker
+            cv2.drawMarker(frame, (int(bbox[0] + (w / 3)), int(bbox[1])), (255, 255, 0), markerType=cv2.MARKER_CROSS)
+            cv2.drawMarker(frame, (int(bbox[2] - (w / 3)), int(bbox[1])), (255, 255, 0), markerType=cv2.MARKER_CROSS)
+
         # if enable info flag then print details about each track
             if FLAGS.info:
                 print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
@@ -278,11 +283,24 @@ def main(_argv):
         # calculate frames per second of running detections
         fps = 1.0 / (time.time() - start_time)
         print("FPS: %.2f" % fps)
-        result = np.asarray(frame)
+        # result = np.asarray(frame)
         result = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         
         if not FLAGS.dont_show:
             cv2.imshow("Output Video", result)
+
+        # [add] crop image
+        if is_set_ROI:
+            x = 0
+            y = 0
+            if outer_ROI[0] > 0:
+                x = int(outer_ROI[0])
+            if outer_ROI[1] > 0:
+                y = int(outer_ROI[1])
+            w = x + int(outer_ROI[2])
+            h = y + int(outer_ROI[3])
+            ROI_image = original_image[y:h, x:w]
+            cv2.imshow("ROI IMAGE", ROI_image)
         
         # if output flag is set, save video file
         if FLAGS.output:
