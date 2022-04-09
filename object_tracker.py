@@ -97,10 +97,11 @@ def main(_argv):
     is_set_ROI = 0
     outer_ROI = [0, 0, 0, 0]
     inner_ROI = [0, 0, 0, 0]
-    bg = cv2.createBackgroundSubtractorMOG2(history=42, varThreshold=16, detectShadows=True)
-    kg = cv2.createBackgroundSubtractorKNN(history=42, dist2Threshold=24, detectShadows=False)
+    bg = cv2.createBackgroundSubtractorMOG2(history=42, varThreshold=16, detectShadows=False)
+    kg = cv2.createBackgroundSubtractorKNN(history=100, dist2Threshold=64, detectShadows=False)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)) # histogram equalization
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    track_dict = {} # track object dictionary
     # while video is running
     while True:
         return_value, original_image = vid.read()
@@ -216,23 +217,42 @@ def main(_argv):
         tracker.predict()
         tracker.update(detections)
 
+        # update dict
+        # key::track_id, value::[([to_tlbr(bbox)], outer_draw_flag, inner_draw_flag, R)]
+        track_value = []
+        for track in tracker.tracks:
+            if not track.is_confirmed() or track.time_since_update > 1:
+                continue
+            t_id = track.track_id
+            if t_id in track_dict:
+                continue
+            bbox = track.to_tlbr()
+            track_dict[t_id] = bbox, 0, 1, 0
+
         # update tracks
         for track in tracker.tracks:
             if not track.is_confirmed() or track.time_since_update > 1:
                 continue 
             bbox = track.to_tlbr()
             class_name = track.get_class()
+            t_id = track.track_id
 
             x, y, w, h = bbox
             w = w - x
             h = h - y
-            if is_set_ROI and (inner_ROI[0] > bbox[0] + (w / 3) or inner_ROI[1] > bbox[1] or inner_ROI[0] + inner_ROI[2] < bbox[2] - (w / 3)):
-                is_set_ROI = 0
+            # track_dict[t_id][0] : bbox
+            # track_dict[t_id][1] : outerROI_flag
+            # track_dict[t_id][2] : innerROI_flag
+
+            # outerROI_flag == 1: outerROI re_calculation
+            if track_dict[t_id][1] and (inner_ROI[0] > bbox[0] + (w / 3) or inner_ROI[1] > bbox[1] or inner_ROI[0] + inner_ROI[2] < bbox[2] - (w / 3)):
+                track_dict[t_id] = track_dict[t_id][0], 0, 1, 0
             print("bbox x, y, w, h : {} {} {} {}".format(int(x), int(y), int(w), int(h)))
         # [add] calculate ROI
-            if not is_set_ROI:
+            if not track_dict[t_id][1]:
                 is_set_ROI = 1
                 R = (h * 0.5) / 3
+                track_dict[t_id] = track_dict[t_id][0], 1, track_dict[t_id][2], R
                 outer_ROI[0] = (x - R)
                 outer_ROI[1] = (y - R)
                 outer_ROI[2] = (w + (2 * R))
@@ -242,6 +262,10 @@ def main(_argv):
                 Rw = w + (2 * R)
                 Rh = 3 * R
 
+            # if not track_dict[t_id][2]:
+            if track_dict[t_id][1]:
+                # track_dict[t_id] = track_dict[t_id][0], track_dict[t_id][1], 1
+                R = track_dict[t_id][3]
                 inner_ROI[0] = (x - (R * 0.5))
                 inner_ROI[1] = (y - (R * 0.5))
                 inner_ROI[2] = (w + R)
@@ -261,24 +285,39 @@ def main(_argv):
         # [add] draw CROSS Marker
             cv2.drawMarker(frame, (int(bbox[0] + (w / 3)), int(bbox[1])), (255, 255, 0), markerType=cv2.MARKER_CROSS)
             cv2.drawMarker(frame, (int(bbox[2] - (w / 3)), int(bbox[1])), (255, 255, 0), markerType=cv2.MARKER_CROSS)
+        # [add] draw ROI
+            if track_dict[t_id][1]:
+                # outer ROI
+                cv2.rectangle(frame, (int(outer_ROI[0]), int(outer_ROI[1])),
+                              (int(outer_ROI[0] + outer_ROI[2]), int(outer_ROI[1] + outer_ROI[3])), (255, 0, 0), 2)
+                cv2.rectangle(frame, (int(outer_ROI[0]), int(outer_ROI[1] - 30)),
+                              (int(outer_ROI[0]) + len("outer_ROI") * 17, int(outer_ROI[1])), (255, 0, 0), -1)
+                cv2.putText(frame, "outer_ROI", (int(outer_ROI[0]), int(outer_ROI[1] - 10)), 0, 0.75,
+                            (255, 255, 255), 2)
+                # inner ROI
+                cv2.rectangle(frame, (int(inner_ROI[0]), int(inner_ROI[1])),
+                              (int(inner_ROI[0] + inner_ROI[2]), int(inner_ROI[1] + inner_ROI[3])), (0, 255, 0), 2)
+                cv2.rectangle(frame, (int(inner_ROI[0]), int(inner_ROI[1] - 30)),
+                              (int(inner_ROI[0]) + len("inner_ROI") * 17, int(inner_ROI[1])), (0, 255, 0), -1)
+                cv2.putText(frame, "inner_ROI", (int(inner_ROI[0]), int(inner_ROI[1] - 10)), 0, 0.75,
+                            (255, 255, 255), 2)
 
         # if enable info flag then print details about each track
             if FLAGS.info:
                 print("Tracker ID: {}, Class: {},  BBox Coords (xmin, ymin, xmax, ymax): {}".format(str(track.track_id), class_name, (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))))
 
         # [add] draw outer_ROI and inner_ROI on screen
-        if is_set_ROI:
-            cv2.rectangle(frame, (int(outer_ROI[0]), int(outer_ROI[1])), (int(outer_ROI[0] + outer_ROI[2]), int(outer_ROI[1] + outer_ROI[3])), (255, 0, 0), 2)
-            cv2.rectangle(frame, (int(outer_ROI[0]), int(outer_ROI[1] - 30)),
-                          (int(outer_ROI[0]) + len("outer_ROI") * 17, int(outer_ROI[1])), (255, 0, 0), -1)
-            cv2.putText(frame, "outer_ROI", (int(outer_ROI[0]), int(outer_ROI[1] - 10)), 0, 0.75,
-                        (255, 255, 255), 2)
-
-            cv2.rectangle(frame, (int(inner_ROI[0]), int(inner_ROI[1])), (int(inner_ROI[0] + inner_ROI[2]), int(inner_ROI[1] + inner_ROI[3])), (0, 255, 0), 2)
-            cv2.rectangle(frame, (int(inner_ROI[0]), int(inner_ROI[1] - 30)),
-                          (int(inner_ROI[0]) + len("inner_ROI") * 17, int(inner_ROI[1])), (0, 255, 0), -1)
-            cv2.putText(frame, "inner_ROI", (int(inner_ROI[0]), int(inner_ROI[1] - 10)), 0, 0.75,
-                        (255, 255, 255), 2)
+        # if is_set_ROI:
+        #     cv2.rectangle(frame, (int(outer_ROI[0]), int(outer_ROI[1])), (int(outer_ROI[0] + outer_ROI[2]), int(outer_ROI[1] + outer_ROI[3])), (255, 0, 0), 2)
+        #     cv2.rectangle(frame, (int(outer_ROI[0]), int(outer_ROI[1] - 30)),
+        #                   (int(outer_ROI[0]) + len("outer_ROI") * 17, int(outer_ROI[1])), (255, 0, 0), -1)
+        #     cv2.putText(frame, "outer_ROI", (int(outer_ROI[0]), int(outer_ROI[1] - 10)), 0, 0.75,
+        #                 (255, 255, 255), 2)
+        #     cv2.rectangle(frame, (int(inner_ROI[0]), int(inner_ROI[1])), (int(inner_ROI[0] + inner_ROI[2]), int(inner_ROI[1] + inner_ROI[3])), (0, 255, 0), 2)
+        #     cv2.rectangle(frame, (int(inner_ROI[0]), int(inner_ROI[1] - 30)),
+        #                   (int(inner_ROI[0]) + len("inner_ROI") * 17, int(inner_ROI[1])), (0, 255, 0), -1)
+        #     cv2.putText(frame, "inner_ROI", (int(inner_ROI[0]), int(inner_ROI[1] - 10)), 0, 0.75,
+        #                 (255, 255, 255), 2)
 
         # calculate frames per second of running detections
         fps = 1.0 / (time.time() - start_time)
@@ -304,6 +343,7 @@ def main(_argv):
             # cv2.imshow("ROI_Image : gray", gray)
             cl_image = clahe.apply(gray)
             cv2.imshow("cl_image", cl_image)
+            cl_image = cv2.resize(cl_image, dsize=(int(w / 2), int(w / 2)))
             gaussian_blur = cv2.GaussianBlur(gray, (5, 5), 0)
             gaussian_blur_cl = cv2.GaussianBlur(cl_image, (5, 5), 0)
             # gaussian_blur = cv2.resize(gaussian_blur, dsize=(int(w/2), int(w/2)))
@@ -317,8 +357,8 @@ def main(_argv):
             background_img = bg.getBackgroundImage()
             bg_mask_open = cv2.morphologyEx(bg_mask, cv2.MORPH_OPEN, kernel)
             # medianBlur = cv2.medianBlur(bg_mask_open, 3)
-            # cv2.imshow("ROI mask", cv2.resize(bg_mask_open, dsize=(w, h)))
-            cv2.imshow("ROI mask", bg_mask_open)
+            cv2.imshow("ROI mask", cv2.resize(bg_mask_open, dsize=(w, h)))
+            # cv2.imshow("ROI mask", bg_mask_open)
             cv2.imshow("ROI background", background_img)
             # cv2.imshow("LoG", log_img)
 
