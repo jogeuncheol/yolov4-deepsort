@@ -60,8 +60,8 @@ def main(_argv):
     session = InteractiveSession(config=config)
     STRIDES, ANCHORS, NUM_CLASS, XYSCALE = utils.load_config(FLAGS)
     input_size = FLAGS.size
-    # video_path = FLAGS.video
-    video_path = "E:/workspace/video_sample/m_day_smoke.mp4"
+    video_path = FLAGS.video
+    # video_path = "E:/workspace/video_sample/day_smoke.mp4"
 
     # load tflite model if flag is set
     if FLAGS.framework == 'tflite':
@@ -99,7 +99,7 @@ def main(_argv):
     inner_ROI = [0, 0, 0, 0]
     bg = cv2.createBackgroundSubtractorMOG2(history=42, varThreshold=16, detectShadows=False)
     kg = cv2.createBackgroundSubtractorKNN(history=100, dist2Threshold=64, detectShadows=False)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)) # histogram equalization
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)) # histogram equalization?
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     track_dict = {} # track object dictionary
     # while video is running
@@ -218,6 +218,8 @@ def main(_argv):
         tracker.update(detections)
 
         # update dict
+        if 11 in track_dict:
+            print("update dict", track_dict[11][4])
         # key::track_id, value::[([to_tlbr(bbox)], outer_draw_flag, inner_draw_flag, R)]
         track_value = []
         for track in tracker.tracks:
@@ -225,9 +227,14 @@ def main(_argv):
                 continue
             t_id = track.track_id
             if t_id in track_dict:
+                if t_id == 11:
+                    print("update dict", track_dict[t_id][4])
                 continue
             bbox = track.to_tlbr()
-            track_dict[t_id] = bbox, 0, 1, 0
+            track_dict[t_id] = bbox, 0, 1,\
+                ((bbox[3] - bbox[1]) * 0.5) / 3, \
+                [bbox[0] - 10, bbox[1] - 10, bbox[2] + 10, bbox[3] + 10], \
+                [bbox[0] - 5, bbox[1] - 5, bbox[2] + 5, bbox[3] + 5]
 
         # update tracks
         for track in tracker.tracks:
@@ -236,40 +243,49 @@ def main(_argv):
             bbox = track.to_tlbr()
             class_name = track.get_class()
             t_id = track.track_id
-
             x, y, w, h = bbox
             w = w - x
             h = h - y
             # track_dict[t_id][0] : bbox
             # track_dict[t_id][1] : outerROI_flag
             # track_dict[t_id][2] : innerROI_flag
+            # track_dict[t_id][3] : _R
 
             # outerROI_flag == 1: outerROI re_calculation
-            if track_dict[t_id][1] and (inner_ROI[0] > bbox[0] + (w / 3) or inner_ROI[1] > bbox[1] or inner_ROI[0] + inner_ROI[2] < bbox[2] - (w / 3)):
-                track_dict[t_id] = track_dict[t_id][0], 0, 1, 0
-            print("bbox x, y, w, h : {} {} {} {}".format(int(x), int(y), int(w), int(h)))
+            LX = track_dict[t_id][4][0]
+            RX = LX + track_dict[t_id][4][2]
+            LY = track_dict[t_id][4][1]
+            RY = LY + track_dict[t_id][4][3]
+            lx = track_dict[t_id][5][0]
+            rx = lx + track_dict[t_id][5][2]
+            ly = track_dict[t_id][5][1]
+            ry = ly + track_dict[t_id][5][3]
+            if track_dict[t_id][1] == 1 and (LX > lx or LY > ly or RX < rx or RY < ry):
+                track_dict[t_id] = track_dict[t_id][0], 0, 1, (h * 0.5) / 3, track_dict[t_id][4], track_dict[t_id][5]
+                if t_id == 11:
+                    print(track_dict[t_id])
         # [add] calculate ROI
             if not track_dict[t_id][1]:
                 is_set_ROI = 1
-                R = (h * 0.5) / 3
-                track_dict[t_id] = track_dict[t_id][0], 1, track_dict[t_id][2], R
-                outer_ROI[0] = (x - R)
-                outer_ROI[1] = (y - R)
-                outer_ROI[2] = (w + (2 * R))
-                outer_ROI[3] = (3 * R)
+                R = track_dict[t_id][3]
+                outer_ROI = [(x - R), (y - R), (w + (2 * R)), (3 * R)]
+                # track_dict[t_id] = track_dict[t_id][0], 1, track_dict[t_id][2], R, outer_ROI, track_dict[t_id][5]
+                track_dict.update({t_id:(track_dict[t_id][0], 1, track_dict[t_id][2], R, outer_ROI, track_dict[t_id][5])})
+                if t_id == 11:
+                    print("t_id == 11 --> outerROI cal", track_dict[t_id][4])
+                    print(track_dict[t_id][1])
                 Rx = x - R
                 Ry = y - R
                 Rw = w + (2 * R)
                 Rh = 3 * R
 
-            # if not track_dict[t_id][2]:
-            if track_dict[t_id][1]:
+            if track_dict[t_id][1] == 1:
                 # track_dict[t_id] = track_dict[t_id][0], track_dict[t_id][1], 1
                 R = track_dict[t_id][3]
-                inner_ROI[0] = (x - (R * 0.5))
-                inner_ROI[1] = (y - (R * 0.5))
-                inner_ROI[2] = (w + R)
-                inner_ROI[3] = (R + (R * 0.5))
+                inner_ROI = [(x - (R * 0.5)), (y - (R * 0.5)), (w + R), (R + (R * 0.5))]
+                if t_id == 11:
+                    print(track_dict[t_id][4])
+                track_dict[t_id] = track_dict[t_id][0], track_dict[t_id][1], track_dict[t_id][2], R, track_dict[t_id][4], inner_ROI
                 RRx = x - (R * 0.5)
                 RRy = y - (R * 0.5)
                 RRw = w + R
@@ -287,19 +303,21 @@ def main(_argv):
             cv2.drawMarker(frame, (int(bbox[2] - (w / 3)), int(bbox[1])), (255, 255, 0), markerType=cv2.MARKER_CROSS)
         # [add] draw ROI
             if track_dict[t_id][1]:
+                if t_id == 11:
+                    print(track_dict[t_id][4])
                 # outer ROI
-                cv2.rectangle(frame, (int(outer_ROI[0]), int(outer_ROI[1])),
-                              (int(outer_ROI[0] + outer_ROI[2]), int(outer_ROI[1] + outer_ROI[3])), (255, 0, 0), 2)
-                cv2.rectangle(frame, (int(outer_ROI[0]), int(outer_ROI[1] - 30)),
-                              (int(outer_ROI[0]) + len("outer_ROI") * 17, int(outer_ROI[1])), (255, 0, 0), -1)
-                cv2.putText(frame, "outer_ROI", (int(outer_ROI[0]), int(outer_ROI[1] - 10)), 0, 0.75,
+                cv2.rectangle(frame, (int(track_dict[t_id][4][0]), int(track_dict[t_id][4][1])),
+                              (int(track_dict[t_id][4][0] + track_dict[t_id][4][2]), int(track_dict[t_id][4][1] + track_dict[t_id][4][3])), (255, 0, 0), 2)
+                cv2.rectangle(frame, (int(track_dict[t_id][4][0]), int(track_dict[t_id][4][1] - 30)),
+                              (int(track_dict[t_id][4][0]) + len("outer_ROI-") * 17, int(track_dict[t_id][4][1])), (255, 0, 0), -1)
+                cv2.putText(frame, "outer_ROI-" + str(t_id), (int(track_dict[t_id][4][0]), int(track_dict[t_id][4][1] - 10)), 0, 0.75,
                             (255, 255, 255), 2)
                 # inner ROI
                 cv2.rectangle(frame, (int(inner_ROI[0]), int(inner_ROI[1])),
                               (int(inner_ROI[0] + inner_ROI[2]), int(inner_ROI[1] + inner_ROI[3])), (0, 255, 0), 2)
                 cv2.rectangle(frame, (int(inner_ROI[0]), int(inner_ROI[1] - 30)),
-                              (int(inner_ROI[0]) + len("inner_ROI") * 17, int(inner_ROI[1])), (0, 255, 0), -1)
-                cv2.putText(frame, "inner_ROI", (int(inner_ROI[0]), int(inner_ROI[1] - 10)), 0, 0.75,
+                              (int(inner_ROI[0]) + len("inner_ROI-") * 17, int(inner_ROI[1])), (0, 255, 0), -1)
+                cv2.putText(frame, "inner_ROI-" + str(t_id), (int(inner_ROI[0]), int(inner_ROI[1] - 10)), 0, 0.75,
                             (255, 255, 255), 2)
 
         # if enable info flag then print details about each track
@@ -341,9 +359,11 @@ def main(_argv):
             ROI_image = original_image[y:y+h, x:x+w]
             gray = cv2.cvtColor(ROI_image, cv2.COLOR_BGR2GRAY)
             # cv2.imshow("ROI_Image : gray", gray)
+            gray = cv2.add(gray, 50)
             cl_image = clahe.apply(gray)
-            cv2.imshow("cl_image", cl_image)
-            cl_image = cv2.resize(cl_image, dsize=(int(w / 2), int(w / 2)))
+            cl_image = cv2.equalizeHist(gray) # histogram equalization
+            #cv2.imshow("cl_image", cl_image)
+            cl_image = cv2.resize(cl_image, dsize=(127, 127)) # dsize=(int(w / 2), int(w / 2))
             gaussian_blur = cv2.GaussianBlur(gray, (5, 5), 0)
             gaussian_blur_cl = cv2.GaussianBlur(cl_image, (5, 5), 0)
             # gaussian_blur = cv2.resize(gaussian_blur, dsize=(int(w/2), int(w/2)))
@@ -355,16 +375,16 @@ def main(_argv):
         # [add] use GMM get background mask and background image
             bg_mask = bg.apply(gaussian_blur_cl)
             background_img = bg.getBackgroundImage()
-            bg_mask_open = cv2.morphologyEx(bg_mask, cv2.MORPH_OPEN, kernel)
+            # bg_mask_open = cv2.morphologyEx(bg_mask, cv2.MORPH_OPEN, kernel)
             # medianBlur = cv2.medianBlur(bg_mask_open, 3)
-            cv2.imshow("ROI mask", cv2.resize(bg_mask_open, dsize=(w, h)))
+            #cv2.imshow("ROI mask", cv2.resize(bg_mask, dsize=(w, h)))
             # cv2.imshow("ROI mask", bg_mask_open)
-            cv2.imshow("ROI background", background_img)
+            #cv2.imshow("ROI background", background_img)
             # cv2.imshow("LoG", log_img)
 
         # if output flag is set, save video file
         if FLAGS.output:
-            out.write(original_image)
+            out.write(result)
         if cv2.waitKey(1) & 0xFF == ord('q'): break
     cv2.destroyAllWindows()
 
